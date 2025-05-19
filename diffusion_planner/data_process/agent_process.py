@@ -107,23 +107,51 @@ def sampled_static_objects_to_array_list(present_tracked_objects):
 def _filter_agents_array(agents, reverse: bool = False):
     """
     Filter detections to keep only agents which appear in the first frame (or last frame if reverse=True)
+    
+    This function filters agent data across all frames, retaining only those agents
+    that appear in the reference frame (first or last depending on 'reverse' flag).
+    The filtering is done based on track_token matching between frames.
+    
     :param agents: The past agents in the scene. A list of [num_frames] arrays, each complying with the AgentInternalIndex schema
-    :param reverse: if True, the last element in the list will be used as the filter
+                       Each array represents agents in a single frame
+    :param reverse: If True, the last frame is used as the reference for filtering instead of the first frame
+                       This controls which frame's agents are considered as the baseline for tracking
     :return: filtered agents in the same format as the input `agents` parameter
-    """
-    target_array = agents[-1] if reverse else agents[0]
-    for i in range(len(agents)):
+                 Each frame's array is modified to contain only agents present in the reference frame
 
+    实际应用场景
+    假设你有一个多帧跟踪数据：
+    第一帧（参考帧）有车辆 A、B、C。
+    第二帧出现了新车辆 D，但 A、B、C 仍在。
+    第三帧车辆 B 离开，剩下 A、C、D。
+    运行这段代码后：
+    如果 reverse=False（参考帧为第一帧），则所有帧只会保留 A、B、C（过滤掉 D）。
+    如果 reverse=True（参考帧为最后一帧），则所有帧只会保留 A、C、D（过滤掉 B）。
+
+    """
+    # Get reference array - either last frame (if reverse=True) or first frame
+    target_array = agents[-1] if reverse else agents[0]
+    
+    # Process each frame's agents array
+    for i in range(len(agents)):
         rows = []
+        
+        # For each agent in current frame, check if it exists in reference frame
         for j in range(agents[i].shape[0]):
             if target_array.shape[0] > 0:
+                # Extract track token of current agent
                 agent_id: float = float(agents[i][j, int(AgentInternalIndex.track_token())])
+                
+                # Check if this agent exists in reference frame by comparing track tokens
                 is_in_target_frame: bool = bool(
                     (agent_id == target_array[:, AgentInternalIndex.track_token()]).max()
                 )
+                
+                # If agent exists in reference frame, keep it
                 if is_in_target_frame:
                     rows.append(agents[i][j, :].squeeze())
 
+        # Update agents array for current frame with filtered results
         if len(rows) > 0:
             agents[i] = np.stack(rows)
         else:
@@ -155,30 +183,34 @@ def _pad_agent_states(agent_trajectories, reverse: bool):
     :param reverse: if True, the padding direction will start from the end of the list instead
     :return: A trajectory of extracted states
     """
-
-
     track_id_idx = AgentInternalIndex.track_token()
     if reverse:
         agent_trajectories = agent_trajectories[::-1]
 
+    # Get the first frame to determine the structure and size of the data
     key_frame = agent_trajectories[0]
 
+    # Create a mapping from track ID to row index in the key frame
     id_row_mapping: Dict[int, int] = {}
     for idx, val in enumerate(key_frame[:, track_id_idx]):
         id_row_mapping[int(val)] = idx
 
+    # Initialize current_state with zeros to store the padded trajectories
     current_state = np.zeros((key_frame.shape[0], key_frame.shape[1]), dtype=np.float64)
+    
+    # Process each frame in the trajectory
     for idx in range(len(agent_trajectories)):
         frame = agent_trajectories[idx]
 
-        # Update current frame
+        # Update current frame by mapping each row to its corresponding position in current_state
         for row_idx in range(frame.shape[0]):
             mapped_row: int = id_row_mapping[int(frame[row_idx, track_id_idx])]
             current_state[mapped_row, :] = frame[row_idx, :]
 
-        # Save current state
+        # Save the current state back to the trajectories
         agent_trajectories[idx] = current_state.copy()
 
+    # If reverse was True, reverse the trajectories back to original order
     if reverse:
         agent_trajectories = agent_trajectories[::-1]
 
@@ -203,7 +235,7 @@ def _pad_agent_states_with_zeros(agent_trajectories):
 
 def agent_past_process(past_ego_states, past_tracked_objects, tracked_objects_types, num_agents, static_objects, static_objects_types, num_static, max_ped_bike, anchor_ego_state):
     """
-    This function process the data from the raw agent data.
+    This function processes the data from the raw agent data.
     :param past_ego_states: The input array data of the ego past.
     :param past_tracked_objects: The input array data of agents in the past.
     :param tracked_objects_types: The type of agents in the past.
@@ -215,22 +247,30 @@ def agent_past_process(past_ego_states, past_tracked_objects, tracked_objects_ty
     :param anchor_ego_state: Ego current state
     :return: ego, agents, selected_indices, static_objects
     """
+    # Define the dimension of the agents' states
     agents_states_dim = 8 # x, y, cos h, sin h, vx, vy, length, width
+    # Assign past ego states to ego history
     ego_history = past_ego_states
+    # Assign past tracked objects to agents
     agents = past_tracked_objects
 
+    # Convert absolute quantities to relative for ego history
     if past_ego_states is not None:
         ego = convert_absolute_quantities_to_relative(ego_history, anchor_ego_state)
     else:
         ego = None
 
+    # Filter agents array
     agent_history = _filter_agents_array(agents, reverse=True)
+    # Get agent types
     agent_types = tracked_objects_types[-1]
 
+    # If there are no agents in the scene, return zero array
     if agent_history[-1].shape[0] == 0:
         # Return zero array when there are no agents in the scene
         agents_array = np.zeros((len(agent_history), 0, agents_states_dim))
     else:
+        # Process agent states
         local_coords_agent_states = []
         padded_agent_states = _pad_agent_states(agent_history, reverse=True)
 
@@ -252,6 +292,7 @@ def agent_past_process(past_ego_states, past_tracked_objects, tracked_objects_ty
             agents_array[i, :, 6] = local_coords_agent_states[i][:, AgentInternalIndex.width()].squeeze()
             agents_array[i, :, 7] = local_coords_agent_states[i][:, AgentInternalIndex.length()].squeeze()
 
+    # Process static objects
     static_objects_array = np.zeros((static_objects.shape[0], 6))
     if static_objects.shape[0] != 0:
         local_coords_static_objects_states = convert_absolute_quantities_to_relative(static_objects, anchor_ego_state, 'static')
@@ -274,15 +315,21 @@ def agent_past_process(past_ego_states, past_tracked_objects, tracked_objects_ty
     # Initialize the result array
     agents = np.zeros((num_agents, agents_array.shape[0], agents_array.shape[-1] + 3), dtype=np.float32)
 
+    # Calculate distance to ego
     distance_to_ego = np.linalg.norm(agents_array[-1, :, :2], axis=-1)
 
     # Sort indices by distance
     sorted_indices = np.argsort(distance_to_ego)
+    print("distance_to_ego: ", distance_to_ego)
+    print("sorted_indices: ", sorted_indices)
 
     # Collect the indices of pedestrians and bicycles
     ped_bike_indices = [i for i in sorted_indices if agent_types[i] in (TrackedObjectType.PEDESTRIAN, TrackedObjectType.BICYCLE)]
     vehicle_indices = [i for i in sorted_indices if agent_types[i] == TrackedObjectType.VEHICLE]
-
+    print("sorted_indices: ", sorted_indices.shape)
+    print("ped_bike_indices: ", len(ped_bike_indices))
+    print("vehicle_indices: ", len(vehicle_indices))
+    print("num_agents: ", (num_agents))
     # If the total number of available agents is less than or equal to num_agents, no need to filter further
     if len(ped_bike_indices) + len(vehicle_indices) <= num_agents:
         selected_indices = sorted_indices[:num_agents]
@@ -301,9 +348,10 @@ def agent_past_process(past_ego_states, past_tracked_objects, tracked_objects_ty
 
         # Sort and limit the selected indices to num_agents
         selected_indices = sorted(selected_indices, key=lambda idx: distance_to_ego[idx])[:num_agents]
-
+    print("selected_indices: ", len(selected_indices))
     # Populate the final agents array with the selected agents' features
     for i, j in enumerate(selected_indices):
+        print("i, j: ", i, j)
         agents[i, :, :agents_array.shape[-1]] = agents_array[:, j, :agents_array.shape[-1]]
         if agent_types[j] == TrackedObjectType.VEHICLE:
             agents[i, :, agents_array.shape[-1]:] = [1, 0, 0]  # Mark as VEHICLE
@@ -313,6 +361,7 @@ def agent_past_process(past_ego_states, past_tracked_objects, tracked_objects_ty
             agents[i, :, agents_array.shape[-1]:] = [0, 0, 1]  # Mark as BICYCLE
 
 
+    # Process static objects
     static_objects = np.zeros((num_static, static_objects_array.shape[-1]+4), dtype=np.float32)
     static_distance_to_ego = np.linalg.norm(static_objects_array[:, :2], axis=-1)
     static_indices = list(np.argsort(static_distance_to_ego))[:num_static]
@@ -328,9 +377,11 @@ def agent_past_process(past_ego_states, past_tracked_objects, tracked_objects_ty
         else:
             static_objects[i, static_objects_array.shape[-1]:] = [0, 0, 0, 1]
 
+    # Convert ego to float32 if it is not None
     if ego is not None:
         ego = ego.astype(np.float32)
 
+    # Return the processed data
     return ego, agents, selected_indices, static_objects
 
 

@@ -133,8 +133,10 @@ def convert_absolute_quantities_to_relative(agent_state, ego_state, agent_type='
     Converts the agent or ego history to ego-centric coordinates.
     :param agent_state: The agent states to convert, in the AgentInternalIndex schema.
     :param ego_state: The ego state to convert, in the EgoInternalIndex schema.
+    :param agent_type: Type of agent (options are 'ego', 'agent', or 'static').
     :return: The converted states, in AgentInternalIndex schema.
     """
+    # Extract ego's current position and heading to form its pose
     ego_pose = np.array(
         [
             float(ego_state[EgoInternalIndex.x()]),
@@ -145,37 +147,47 @@ def convert_absolute_quantities_to_relative(agent_state, ego_state, agent_type='
     )
 
     if agent_type == 'ego':
+        # Retrieve global positions and headings for ego
         agent_global_poses = agent_state[:, [EgoInternalIndex.x(), EgoInternalIndex.y(), EgoInternalIndex.heading()]]
+        # Compute transformation matrices from local to local reference frames
         transforms = _local_to_local_transforms(agent_global_poses, ego_pose)
+        # Convert transformations into SE2 array format
         transformed_poses = _transform_matrix_to_state_se2_array_batch(transforms)
+        # Update agent state with transformed x, y, and heading values
         agent_state[:, EgoInternalIndex.x()] = transformed_poses[:, 0]
         agent_state[:, EgoInternalIndex.y()] = transformed_poses[:, 1]
         agent_state[:, EgoInternalIndex.heading()] = transformed_poses[:, 2]
 
-        # local vel,acc to local
+        # Process velocity and acceleration vectors by transforming them to local frame
         agent_local_vel = agent_state[:, [EgoInternalIndex.vx(), EgoInternalIndex.vy()]]
         agent_local_acc = agent_state[:, [EgoInternalIndex.ax(), EgoInternalIndex.ay()]]
         agent_local_vel = np.expand_dims(np.concatenate((agent_local_vel, np.zeros((agent_local_vel.shape[0], 1))), axis=-1), axis=-1)
         agent_local_acc = np.expand_dims(np.concatenate((agent_local_acc, np.zeros((agent_local_acc.shape[0], 1))), axis=-1), axis=-1)
         transformed_vel = np.matmul(transforms, agent_local_vel).squeeze(axis=-1)
         transformed_acc = np.matmul(transforms, agent_local_acc).squeeze(axis=-1)
+        # Update velocity and acceleration values in agent state
         agent_state[:, EgoInternalIndex.vx()] = transformed_vel[:, 0]
         agent_state[:, EgoInternalIndex.vy()] = transformed_vel[:, 1]
         agent_state[:, EgoInternalIndex.ax()] = transformed_acc[:, 0]
         agent_state[:, EgoInternalIndex.ay()] = transformed_acc[:, 1]
     elif agent_type == 'agent':
+        # Retrieve global poses and velocities for agents
         agent_global_poses = agent_state[:, [AgentInternalIndex.x(), AgentInternalIndex.y(), AgentInternalIndex.heading()]]
         agent_global_velocities = agent_state[:, [AgentInternalIndex.vx(), AgentInternalIndex.vy()]]
+        # Transform global poses and velocities to local reference frame
         transformed_poses = _global_state_se2_array_to_local(agent_global_poses, ego_pose)
         transformed_velocities = _global_velocity_to_local(agent_global_velocities, ego_pose[-1])
+        # Update agent state with transformed poses and velocities
         agent_state[:, AgentInternalIndex.x()] = transformed_poses[:, 0]
         agent_state[:, AgentInternalIndex.y()] = transformed_poses[:, 1]
         agent_state[:, AgentInternalIndex.heading()] = transformed_poses[:, 2]
         agent_state[:, AgentInternalIndex.vx()] = transformed_velocities[:, 0]
         agent_state[:, AgentInternalIndex.vy()] = transformed_velocities[:, 1]
     elif agent_type == 'static':
+        # Handle static objects by directly transforming their poses
         agent_global_poses = agent_state[:, [0, 1, 2]]
         transformed_poses = _global_state_se2_array_to_local(agent_global_poses, ego_pose)
+        # Update the static object's pose in agent state
         agent_state[:, 0] = transformed_poses[:, 0]
         agent_state[:, 1] = transformed_poses[:, 1]
         agent_state[:, 2] = transformed_poses[:, 2]

@@ -284,17 +284,20 @@ def _lane_polyline_process(polylines, left_boundary, right_boundary, avails, tra
 
 def map_process(route_roadblock_ids, anchor_ego_state, coords, traffic_light_data, speed_limit, lane_route, map_features, max_elements, max_points):
     """
-    This function process the data from the raw vector set map data.
-    :param route_roadblock_ids: route road block ids.
-    :param anchor_ego_state: ego current state.
-    :param coords: dictionary mapping feature name to polyline vector sets.
-    :param traffic_light_data: traffic light status of lanes.
-    :param speed_limit: speed limit of lanes.
-    :param lane_route: road block ids of lanes.
-    :param map_features: Name of map features to extract.
-    :param max_elements: clip the number of map elements.
-    :param max_points: clip the number of point for each element.
-    :return: dict of the map elements.
+    This function processes raw vector set map data to generate a structured representation of the driving environment.
+    It converts map elements into local ego coordinates, handles traffic light data, and extracts route information.
+
+    :param route_roadblock_ids: List of roadblock IDs that define the planned route
+    :param anchor_ego_state: Current state (position, velocity, etc.) of the ego vehicle
+    :param coords: Dictionary mapping feature names to polyline vector sets containing coordinates
+    :param traffic_light_data: Traffic light status for lanes
+    :param speed_limit: Speed limit information for lanes
+    :param lane_route: Road block ids indicating lane routing
+    :param map_features: Names of map features to extract (e.g., LANE, LEFT_BOUNDARY)
+    :param max_elements: Maximum number of map elements to include (for clipping)
+    :param max_points: Maximum number of points per element (for clipping)
+    :return: Dictionary containing processed vector map data with structured representations
+             of different map elements (lanes, boundaries, route lanes, etc.)
     """
     list_array_data = {}
 
@@ -337,6 +340,7 @@ def map_process(route_roadblock_ids, anchor_ego_state, coords, traffic_light_dat
             )
 
             if feature_name == 'LANE':
+                # Convert lane data to fixed size arrays with boundary information
                 coords, left_coords, right_coords, tl_data, avails, lane_has_speed_limit_array, lane_speed_limit_array, lane_routes = _convert_lane_to_fixed_size(
                         anchor_ego_state,
                         feature_coords,
@@ -354,14 +358,13 @@ def map_process(route_roadblock_ids, anchor_ego_state, coords, traffic_light_dat
                         ]
                         else None,
                 )
+                # Convert left and right boundary coordinates to local frame relative to ego
                 left_coords = vector_set_coordinates_to_local_frame(left_coords, avails, anchor_ego_state)
                 right_coords = vector_set_coordinates_to_local_frame(right_coords, avails, anchor_ego_state)
                 array_output[f"vector_set_map.coords.LEFT_BOUNDARY"] = left_coords
                 array_output[f"vector_set_map.coords.RIGHT_BOUNDARY"] = right_coords
 
-                '''
-                Get roadblock polygon
-                '''
+                # Get roadblock polygon information from lane route data
                 lane_on_route = []
                 pruned_lane_roadblock_ids = [route for route in route_roadblock_ids if route in lane_routes]
                 pruned_route_roadblock_ids = _prune_route_by_connectivity(route_roadblock_ids, pruned_lane_roadblock_ids)
@@ -372,6 +375,7 @@ def map_process(route_roadblock_ids, anchor_ego_state, coords, traffic_light_dat
             elif feature_name == 'LEFT_BOUNDARY' or feature_name == 'RIGHT_BOUNDARY':
                 continue
             
+            # Convert main coordinates to local frame relative to ego
             coords = vector_set_coordinates_to_local_frame(coords, avails, anchor_ego_state)
 
             array_output[f"vector_set_map.coords.{feature_name}"] = coords
@@ -380,9 +384,9 @@ def map_process(route_roadblock_ids, anchor_ego_state, coords, traffic_light_dat
             if tl_data is not None:
                 array_output[f"vector_set_map.traffic_light_data.{feature_name}"] = tl_data
 
-
     """
-    Post-precoss the map elements to different map types. Each map type is a array with the following shape.
+    Post-process the map elements into different map types. Each map type is an array with defined shape.
+    This includes special processing for lanes and route lanes to create structured representations.
     """
 
     for feature_name in map_features:
@@ -396,7 +400,7 @@ def map_process(route_roadblock_ids, anchor_ego_state, coords, traffic_light_dat
 
         elif feature_name == "ROUTE_LANES":
             loc = 0
-            # TODO: add has speed limit
+            # Process route lanes by copying relevant lane data and speed limit information
             vector_map_route_lanes = np.zeros((max_elements["ROUTE_LANES"], vector_map_lanes.shape[-2], vector_map_lanes.shape[-1]), dtype=np.float32)
             route_lanes_speed_limit = np.zeros((max_elements["ROUTE_LANES"], 1), dtype=np.float32)
             route_lanes_has_speed_limit = np.zeros((max_elements["ROUTE_LANES"], 1), dtype=np.bool_)

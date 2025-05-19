@@ -9,17 +9,31 @@ from nuplan.planning.training.preprocessing.features.trajectory_utils import con
 from nuplan.common.actor_state.vehicle_parameters import get_pacifica_parameters
 
 def get_ego_past_array_from_scenario(scenario, num_past_poses, past_time_horizon):
-    
+    """
+    从给定的场景中提取自车（ego vehicle）的历史状态和时间戳数组。
+
+    参数:
+    - scenario: 包含自车初始状态和历史轨迹的场景对象。
+    - num_past_poses: 要获取的过去姿态的数量。
+    - past_time_horizon: 获取过去姿态的时间范围。
+
+    返回值:
+    - past_ego_states_array: 自车历史状态的数组表示。
+    - past_time_stamps_array: 对应历史状态的时间戳数组。
+    """
+    # 获取自车的初始状态
     current_ego_state = scenario.initial_ego_state
-    
+
+    # 获取自车的过去轨迹
     past_ego_states = scenario.get_ego_past_trajectory(
         iteration=0, num_samples=num_past_poses, time_horizon=past_time_horizon
     )
 
+    # 将过去轨迹与当前状态合并，并转换为数组
     sampled_past_ego_states = list(past_ego_states) + [current_ego_state]
     past_ego_states_array = sampled_past_ego_states_to_array(sampled_past_ego_states)
 
-    
+    # 获取过去的时间戳并添加当前开始时间，然后转换为数组
     past_time_stamps = list(
         scenario.get_past_timestamps(
             iteration=0, num_samples=num_past_poses, time_horizon=past_time_horizon
@@ -36,9 +50,26 @@ def get_ego_past_array_from_scenario(scenario, num_past_poses, past_time_horizon
 
 
 def sampled_past_ego_states_to_array(past_ego_states: List[EgoState]) -> npt.NDArray[np.float32]:
+    """
+    将采样的历史自车状态转换为numpy数组格式。
 
+    参数:
+        past_ego_states (List[EgoState]): 自车的历史状态列表，每个元素包含时间步的状态信息
+
+    返回:
+        npt.NDArray[np.float32]: 包含自车历史状态的二维数组，形状为(N,7)，其中N为状态数量
+        数组包含以下字段（按列索引）：
+            - x坐标（EgoInternalIndex.x()）
+            - y坐标（EgoInternalIndex.y()）
+            - 航向角（EgoInternalIndex.heading()）
+            - x方向速度（EgoInternalIndex.vx()）
+            - y方向速度（EgoInternalIndex.vy()）
+            - x方向加速度（EgoInternalIndex.ax()）
+            - y方向加速度（EgoInternalIndex.ay()）
+    """
     output = np.zeros((len(past_ego_states), 7), dtype=np.float64)
     for i in range(0, len(past_ego_states), 1):
+        # 填充自车状态数据到输出数组
         output[i, EgoInternalIndex.x()] = past_ego_states[i].rear_axle.x
         output[i, EgoInternalIndex.y()] = past_ego_states[i].rear_axle.y
         output[i, EgoInternalIndex.heading()] = past_ego_states[i].rear_axle.heading
