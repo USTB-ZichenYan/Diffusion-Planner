@@ -232,6 +232,7 @@ def coordinates_to_local_frame(
     # [x2, y2]     [x2, y2, 1]
     # ...          ...
     # [xn, yn]     [xn, yn, 1]
+    # 第二个 (0, 1) 表示在第二个维度（列）上的填充宽度。这里的 0 表示在列的开头不添加填充，1 表示在列的末尾添加一个元素。
     coords = np.pad(coords, pad_width=((0, 0), (0, 1)), mode='constant', constant_values=1.0)
 
     # Perform the transformation, transposing so the shapes match

@@ -28,9 +28,12 @@ def get_ego_past_array_from_scenario(scenario, num_past_poses, past_time_horizon
     past_ego_states = scenario.get_ego_past_trajectory(
         iteration=0, num_samples=num_past_poses, time_horizon=past_time_horizon
     )
+    # print("获取自车历史轨迹...: ", list(past_ego_states))
 
     # 将过去轨迹与当前状态合并，并转换为数组
     sampled_past_ego_states = list(past_ego_states) + [current_ego_state]
+    # print("获取自车历史轨迹...: ", sampled_past_ego_states)
+
     past_ego_states_array = sampled_past_ego_states_to_array(sampled_past_ego_states)
 
     # 获取过去的时间戳并添加当前开始时间，然后转换为数组

@@ -1,7 +1,7 @@
 import math
 import torch
 import torch.nn as nn
-from timm.models.layers import Mlp
+from timm.layers import Mlp
 from timm.layers import DropPath
 
 from diffusion_planner.model.diffusion_utils.sampling import dpm_sampler
@@ -9,7 +9,7 @@ from diffusion_planner.model.diffusion_utils.sde import SDE, VPSDE_linear
 from diffusion_planner.utils.normalizer import ObservationNormalizer, StateNormalizer
 from diffusion_planner.model.module.mixer import MixerBlock
 from diffusion_planner.model.module.dit import TimestepEmbedder, DiTBlock, FinalLayer
-
+from diffusion_planner.model.guidance.guidance_wrapper import GuidanceWrapper
 
 class Decoder(nn.Module):
     def __init__(self, config):
@@ -34,7 +34,8 @@ class Decoder(nn.Module):
         self._state_normalizer: StateNormalizer = config.state_normalizer
         self._observation_normalizer: ObservationNormalizer = config.observation_normalizer
         
-        self._guidance_fn = config.guidance_fn
+        self._guidance_fn = GuidanceWrapper()
+
         
     @property
     def sde(self):

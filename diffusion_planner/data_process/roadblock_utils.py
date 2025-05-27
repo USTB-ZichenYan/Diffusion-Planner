@@ -11,6 +11,207 @@ from nuplan.planning.simulation.occupancy_map.strtree_occupancy_map import STRTr
 from nuplan.common.maps.abstract_map import AbstractMap
 from nuplan.common.maps.abstract_map_objects import RoadBlockGraphEdgeMapObject
 
+import heapq
+from typing import List, Dict, Optional, Tuple, Union
+
+class AStarSearchRoadBlock:
+    """
+    A class that performs A* search on the roadblock graph.
+    """
+
+    def __init__(
+        self, 
+        start_roadblock_id: str, 
+        map_api: Optional["AbstractMap"], 
+        forward_search: bool = True,
+        heuristic_weight: float = 1.0
+    ):
+        """
+        Constructor of AStarSearchRoadBlock class
+        
+        Args:
+            start_roadblock_id: roadblock id where graph starts
+            map_api: map class in nuPlan
+            forward_search: whether to search in driving direction
+            heuristic_weight: weight for the heuristic function (default 1.0 for standard A*)
+        """
+        self._map_api: Optional["AbstractMap"] = map_api
+        self._start_roadblock_id = start_roadblock_id
+        self._forward_search = forward_search
+        self._heuristic_weight = heuristic_weight
+        
+        # A* specific data structures
+        self._open_set: List[Tuple[float, int, "RoadBlockGraphEdgeMapObject"]] = []
+        self._closed_set: Dict[str, bool] = {}
+        
+        # g_score: cost from start to current node
+        self._g_score: Dict[str, float] = {}
+        
+        # f_score: estimated total cost from start to goal through current node
+        self._f_score: Dict[str, float] = {}
+        
+        # came_from: 记录路径
+        self._came_from: Dict[str, Optional["RoadBlockGraphEdgeMapObject"]] = {}
+        
+        # Lazy loaded
+        self._target_roadblock_ids: List[str] = None
+
+    def search(
+        self, 
+        target_roadblock_id: Union[str, List[str]], 
+        max_depth: int = float('inf'),
+        max_cost: float = float('inf')
+    ) -> Tuple[List["RoadBlockGraphEdgeMapObject"], bool]:
+        """
+        Apply A* to find route to target roadblock.
+        
+        Args:
+            target_roadblock_id: id of target roadblock(s)
+            max_depth: maximum search depth (optional)
+            max_cost: maximum allowed cost (optional)
+            
+        Returns:
+            tuple of route and whether a path was found
+        """
+        if isinstance(target_roadblock_id, str):
+            target_roadblock_id = [target_roadblock_id]
+        self._target_roadblock_ids = target_roadblock_id
+        
+        start_edge = self.id_to_roadblock(self._start_roadblock_id)
+        
+        # Initialize scores
+        start_key = start_edge.id
+        self._g_score[start_key] = 0
+        self._f_score[start_key] = self._calculate_heuristic(start_edge)
+        
+        # Priority queue: (f_score, depth, edge)
+        heapq.heappush(self._open_set, (self._f_score[start_key], 0, start_edge))
+        self._came_from[start_key] = None
+        
+        # Track current depth
+        current_depth = 0
+        
+        while self._open_set:
+            # Pop the node with the lowest f-score
+            # Pop the node with the lowest f-score
+            _, current_depth, current_edge = heapq.heappop(self._open_set)
+            current_key = current_edge.id
+            
+            # Check if we've reached the goal
+            if current_key in self._target_roadblock_ids:
+                return self._construct_path(current_edge), True
+                
+            # Check depth and cost limits
+            if current_depth > max_depth or self._g_score[current_key] > max_cost:
+                continue
+                
+            # Skip if already processed with lower cost
+            if current_key in self._closed_set:
+                continue
+            self._closed_set[current_key] = True
+            
+            # Get neighbors
+            neighbors = (
+                current_edge.outgoing_edges if self._forward_search else current_edge.incoming_edges
+            )
+            
+            # Process each neighbor
+            for neighbor_edge in neighbors:
+                neighbor_key = neighbor_edge.id
+                
+                # Skip if already closed
+                if neighbor_key in self._closed_set:
+                    continue
+                    
+                # Calculate tentative g_score
+                # 假设每一步的cost为1，可以根据实际距离或时间修改
+                tentative_g_score = self._g_score[current_key] + 1
+                
+                # Check if this path is better than previous
+                if neighbor_key not in self._g_score or tentative_g_score < self._g_score[neighbor_key]:
+                    # Record the best path so far
+                    self._came_from[neighbor_key] = current_edge
+                    self._g_score[neighbor_key] = tentative_g_score
+                    
+                    # Calculate f_score
+                    h_score = self._calculate_heuristic(neighbor_edge)
+                    self._f_score[neighbor_key] = tentative_g_score + self._heuristic_weight * h_score
+                    
+                    # Push to priority queue with updated depth
+                    heapq.heappush(self._open_set, (self._f_score[neighbor_key], current_depth + 1, neighbor_edge))
+        
+        # No path found
+        return [], False
+
+    def id_to_roadblock(self, id: str) -> "RoadBlockGraphEdgeMapObject":
+        """
+        Retrieves roadblock from map-api based on id
+        """
+        if not self._map_api:
+            raise ValueError("Map API not initialized")
+            
+        block = self._map_api._get_roadblock(id)
+        block = block or self._map_api._get_roadblock_connector(id)
+        
+        if not block:
+            raise ValueError(f"Roadblock with id {id} not found")
+            
+        return block
+
+    def _calculate_heuristic(self, edge: "RoadBlockGraphEdgeMapObject") -> float:
+        """
+        Calculate heuristic estimate of the cost from the current edge to the nearest goal.
+        
+        Args:
+            edge: current roadblock edge
+            
+        Returns:
+            heuristic cost estimate
+        """
+        # 简单实现：计算到目标路块的欧几里得距离
+        # 实际应用中可以使用路网距离或其他更精确的启发式函数
+        min_distance = float('inf')
+        
+        # 获取当前边的中心点
+        current_position = edge.centerline[len(edge.centerline) // 2].point
+        
+        for target_id in self._target_roadblock_ids:
+            try:
+                target_edge = self.id_to_roadblock(target_id)
+            except ValueError:
+                continue
+                
+            if target_edge:
+                # 获取目标边的中心点
+                target_position = target_edge.centerline[len(target_edge.centerline) // 2].point
+                
+                # 计算欧几里得距离
+                distance = ((current_position.x - target_position.x) ** 2 + 
+                           (current_position.y - target_position.y) ** 2) ** 0.5
+                
+                min_distance = min(min_distance, distance)
+        
+        return min_distance
+
+    def _construct_path(self, end_edge: "RoadBlockGraphEdgeMapObject") -> List["RoadBlockGraphEdgeMapObject"]:
+        """
+        Constructs the path from start to end using the came_from dictionary.
+        """
+        path = []
+        current_edge = end_edge
+        
+        while current_edge:
+            path.append(current_edge)
+            current_key = current_edge.id
+            current_edge = self._came_from.get(current_key)
+            
+            # 防止循环路径
+            if current_edge and current_edge.id in [edge.id for edge in path]:
+                print(f"警告: 检测到循环路径，可能是算法实现有误")
+                break
+                
+        # 反转路径，使其从起点到终点
+        return path[::-1]    
 
 def normalize_angle(angle: np.ndarray):
     return (angle + np.pi) % (2 * np.pi) - np.pi
@@ -209,7 +410,7 @@ def get_current_roadblock_candidates(
         roadblock_dict[SemanticMapLayer.ROADBLOCK]
         + roadblock_dict[SemanticMapLayer.ROADBLOCK_CONNECTOR]
     )
-    print("roadblock_candidates:", len(roadblock_candidates), roadblock_candidates)
+    # print("roadblock_candidates:", len(roadblock_candidates), roadblock_candidates)
 
     # If no nearby roadblocks found, search for the nearest ones
     if not roadblock_candidates:
@@ -232,9 +433,9 @@ def get_current_roadblock_candidates(
     # Evaluate each roadblock candidate to determine its suitability
     for idx, roadblock in enumerate(roadblock_candidates):
         lane_displacement_error, lane_heading_error = np.inf, np.inf
-        print("roadblock: ", roadblock)
-        print("roadblock.interior_edges: ", roadblock.interior_edges)
-        print("ego_pose.point.array[None, ...]: ", ego_pose, ego_pose.point.array[None, ...])
+        # print("roadblock: ", roadblock)
+        # print("roadblock.interior_edges: ", roadblock.interior_edges)
+        # print("ego_pose.point.array[None, ...]: ", ego_pose, ego_pose.point.array[None, ...])
         # Analyze each interior edge (lane) of the roadblock
         '''
         roadblock.interior_edges是roadblock的所有车道
@@ -244,13 +445,13 @@ def get_current_roadblock_candidates(
             lane_discrete_points = np.array(
                 [state.point.array for state in lane_discrete_path], dtype=np.float64
             )
-            print("lane_discrete_path: ", len(lane_discrete_path))
-            print("lane_discrete_points: ", lane_discrete_points.shape)
-            print("(lane_discrete_points - ego_pose.point.array[None, ...]) ** 2.0: ", (lane_discrete_points - ego_pose.point.array[None, ...]).shape)
+            # print("lane_discrete_path: ", len(lane_discrete_path))
+            # print("lane_discrete_points: ", lane_discrete_points.shape)
+            # print("(lane_discrete_points - ego_pose.point.array[None, ...]) ** 2.0: ", (lane_discrete_points - ego_pose.point.array[None, ...]).shape)
             lane_state_distances = (
                 (lane_discrete_points - ego_pose.point.array[None, ...]) ** 2.0
             ).sum(axis=-1) ** 0.5
-            print("lane_state_distances: ", lane_state_distances.shape)
+            # print("lane_state_distances: ", lane_state_distances.shape)
             argmin = np.argmin(lane_state_distances)
 
             heading_error = np.abs(
@@ -337,15 +538,15 @@ def route_roadblock_correction(
 
     route_roadblock_dict = {}
     for id_ in route_roadblock_ids:
-        print("id: ", id_)
+        # print("id: ", id_)
         block = map_api.get_map_object(id_, SemanticMapLayer.ROADBLOCK)
-        print("block: ", block)
+        # print("block: ", block)
         block = block or map_api.get_map_object(
             id_, SemanticMapLayer.ROADBLOCK_CONNECTOR
         )
-        print("block: ", block)
+        # print("block: ", block)
         route_roadblock_dict[id_] = block
-    print("route_roadblock_dict: ", route_roadblock_dict)
+    # print("route_roadblock_dict: ", route_roadblock_dict)
     starting_block, starting_block_candidates = get_current_roadblock_candidates(
         ego_state, map_api, route_roadblock_dict
     )

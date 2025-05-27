@@ -44,7 +44,23 @@ class DataProcessor(object):
 
     # Use for inference
     def observation_adapter(self, history_buffer, traffic_light_data, map_api, route_roadblock_ids, device='cpu'):
+        """
+        将历史观测数据适配为模型输入格式。
 
+        参数:
+            history_buffer: 历史观测缓冲区，包含当前和过去的观测数据
+            traffic_light_data: 交通灯状态数据
+            map_api: 地图API接口，用于获取地图信息
+            route_roadblock_ids: 路线上的路障ID列表
+            device: 计算设备类型（'cpu'或'cuda'），默认为'cpu'
+
+        返回:
+            dict: 包含处理后的模型输入数据的字典，包含以下键值对：
+                - neighbor_agents_past: 周围智能体的历史轨迹数据
+                - ego_current_state: 自车当前状态（坐标、方向等）
+                - static_objects: 静态物体数据
+                - vector_map: 处理后的地图向量数据
+        """
         '''
         ego
         '''
@@ -117,7 +133,10 @@ class DataProcessor(object):
                     iteration=0, time_horizon=self.past_time_horizon, num_samples=self.num_past_poses
                 )
             ]
+
             sampled_past_observations = past_tracked_objects + [present_tracked_objects]
+            # self.past_time_horizon * self.num_past_poses + 1 = 21
+            print("sampled_past_observations: ", len(sampled_past_observations))
             # 将采样得到的观测转换为数组形式
             neighbor_agents_past, neighbor_agents_types = \
                 sampled_tracked_objects_to_array_list(sampled_past_observations)
@@ -128,15 +147,15 @@ class DataProcessor(object):
             # 对代理和静态物体的历史进行处理以获得固定大小的输出
             ego_agent_past, neighbor_agents_past, neighbor_indices, static_objects = \
                 agent_past_process(ego_agent_past, neighbor_agents_past, neighbor_agents_types, self.num_agents, static_objects, static_objects_types, self.num_static, self.max_ped_bike, anchor_ego_state)
-            
+
             '''
             Map
             '''
             # 获取路线上的道路块ID及交通灯状态
             route_roadblock_ids = scenario.get_route_roadblock_ids()
             traffic_light_data = list(scenario.get_traffic_light_status_at_iteration(0))
-            print("route_roadblock_ids: ", route_roadblock_ids)
-            print("traffic_light_data: ", traffic_light_data)
+            # print("route_roadblock_ids: ", route_roadblock_ids)
+            # print("traffic_light_data: ", traffic_light_data)
             '''
             route_roadblock_ids:  
             ['19334', '19082', '19710', '19190', '19658', '19208', '19652', '19207', 
@@ -153,12 +172,16 @@ class DataProcessor(object):
                 route_roadblock_ids = route_roadblock_correction(
                     ego_state, map_api, route_roadblock_ids
                 )
-            print("route_roadblock_ids_post: ", route_roadblock_ids)
+            print("route_roadblock_ids_input: ", route_roadblock_ids)
 
             # 获取邻近地图元素及其特征
             coords, traffic_light_data, speed_limit, lane_route = get_neighbor_vector_set_map(
                 map_api, self._map_features, ego_coords, self._radius, traffic_light_data
             )
+            # print("coords_input: ", coords)
+            print("traffic_light_data_input: ", traffic_light_data)
+            print("speed_limit_input: ", speed_limit)
+            print("lane_route_input: ", lane_route)
 
             # 处理地图信息以适应模型输入要求
             vector_map = map_process(route_roadblock_ids, anchor_ego_state, coords, traffic_light_data, speed_limit, lane_route, self._map_features, 
@@ -194,6 +217,14 @@ class DataProcessor(object):
             # gather data
             data = {"map_name": map_name, "token": token, "ego_current_state": ego_current_state, "ego_agent_future": ego_agent_future,
                     "neighbor_agents_past": neighbor_agents_past, "neighbor_agents_future": neighbor_agents_future, "static_objects": static_objects}
+            print('map_name: ', map_name)
+            print('ego_current_state: ', ego_current_state.shape, ego_current_state[0])
+            print('ego_agent_past: ', ego_agent_past.shape, ego_agent_past[0])
+            print('ego_agent_future: ', ego_agent_future.shape, ego_agent_future[0])
+            print('neighbor_agents_past: ', neighbor_agents_past.shape, neighbor_agents_past[0])
+            print('neighbor_agents_future: ', neighbor_agents_future.shape, neighbor_agents_future[0])
+            print('static_objects: ', static_objects.shape, static_objects[0])
+    
             data.update(vector_map)
 
             self.save_to_disk(self._save_dir, data)

@@ -49,6 +49,7 @@ def _extract_agent_array(tracked_objects, track_token_ids, object_types):
         output[idx, AgentInternalIndex.y()] = agent.center.y
         agent_types.append(agent.tracked_object_type)
 
+    print("output_agent_types:", output.shape, len(agent_types))
     return output, track_token_ids, agent_types
 
 
@@ -291,7 +292,7 @@ def agent_past_process(past_ego_states, past_tracked_objects, tracked_objects_ty
             agents_array[i, :, 5] = local_coords_agent_states[i][:, AgentInternalIndex.vy()].squeeze()
             agents_array[i, :, 6] = local_coords_agent_states[i][:, AgentInternalIndex.width()].squeeze()
             agents_array[i, :, 7] = local_coords_agent_states[i][:, AgentInternalIndex.length()].squeeze()
-
+    print("agents_array: ", agents_array.shape)
     # Process static objects
     static_objects_array = np.zeros((static_objects.shape[0], 6))
     if static_objects.shape[0] != 0:
@@ -314,22 +315,22 @@ def agent_past_process(past_ego_states, past_tracked_objects, tracked_objects_ty
     '''
     # Initialize the result array
     agents = np.zeros((num_agents, agents_array.shape[0], agents_array.shape[-1] + 3), dtype=np.float32)
-
+    print("agents_size: ", agents.shape)
     # Calculate distance to ego
     distance_to_ego = np.linalg.norm(agents_array[-1, :, :2], axis=-1)
 
     # Sort indices by distance
     sorted_indices = np.argsort(distance_to_ego)
-    print("distance_to_ego: ", distance_to_ego)
-    print("sorted_indices: ", sorted_indices)
+    # print("distance_to_ego: ", distance_to_ego)
+    # print("sorted_indices: ", sorted_indices)
 
     # Collect the indices of pedestrians and bicycles
     ped_bike_indices = [i for i in sorted_indices if agent_types[i] in (TrackedObjectType.PEDESTRIAN, TrackedObjectType.BICYCLE)]
     vehicle_indices = [i for i in sorted_indices if agent_types[i] == TrackedObjectType.VEHICLE]
-    print("sorted_indices: ", sorted_indices.shape)
-    print("ped_bike_indices: ", len(ped_bike_indices))
-    print("vehicle_indices: ", len(vehicle_indices))
-    print("num_agents: ", (num_agents))
+    # print("sorted_indices: ", sorted_indices.shape)
+    # print("ped_bike_indices: ", len(ped_bike_indices))
+    # print("vehicle_indices: ", len(vehicle_indices))
+    # print("num_agents: ", (num_agents))
     # If the total number of available agents is less than or equal to num_agents, no need to filter further
     if len(ped_bike_indices) + len(vehicle_indices) <= num_agents:
         selected_indices = sorted_indices[:num_agents]
@@ -348,10 +349,10 @@ def agent_past_process(past_ego_states, past_tracked_objects, tracked_objects_ty
 
         # Sort and limit the selected indices to num_agents
         selected_indices = sorted(selected_indices, key=lambda idx: distance_to_ego[idx])[:num_agents]
-    print("selected_indices: ", len(selected_indices))
+    # print("selected_indices: ", len(selected_indices))
     # Populate the final agents array with the selected agents' features
     for i, j in enumerate(selected_indices):
-        print("i, j: ", i, j)
+        # print("i, j: ", i, j)
         agents[i, :, :agents_array.shape[-1]] = agents_array[:, j, :agents_array.shape[-1]]
         if agent_types[j] == TrackedObjectType.VEHICLE:
             agents[i, :, agents_array.shape[-1]:] = [1, 0, 0]  # Mark as VEHICLE
@@ -359,7 +360,7 @@ def agent_past_process(past_ego_states, past_tracked_objects, tracked_objects_ty
             agents[i, :, agents_array.shape[-1]:] = [0, 1, 0]  # Mark as PEDESTRIAN
         else:  # TrackedObjectType.BICYCLE
             agents[i, :, agents_array.shape[-1]:] = [0, 0, 1]  # Mark as BICYCLE
-
+    print("agents_size: ", agents.shape)
 
     # Process static objects
     static_objects = np.zeros((num_static, static_objects_array.shape[-1]+4), dtype=np.float32)

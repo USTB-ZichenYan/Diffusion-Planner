@@ -57,7 +57,7 @@ def _get_lane_polylines(
     lane_roadblock_ids = []
     layer_names = [SemanticMapLayer.LANE, SemanticMapLayer.LANE_CONNECTOR]
     layers = map_api.get_proximal_map_objects(point, radius, layer_names)
-
+    print("get_proximal_map_objects_layers: ", len(layers))
     map_objects = []
 
     for layer_name in layer_names:
@@ -67,8 +67,11 @@ def _get_lane_polylines(
 
     for map_obj in map_objects:
         # center lane
+        # print("map_obj.baseline_path.discrete_path: ", map_obj.baseline_path.discrete_path)
         baseline_path_polyline = [Point2D(node.x, node.y) for node in map_obj.baseline_path.discrete_path]
+        # print("baseline_path_polyline: ", baseline_path_polyline)
         lanes_mid.append(baseline_path_polyline)
+        # print("lanes_mid: ", len(lanes_mid))
 
         # boundaries
         lanes_left.append([Point2D(node.x, node.y) for node in map_obj.left_boundary.discrete_path])
@@ -76,6 +79,7 @@ def _get_lane_polylines(
 
         # lane ids
         lane_ids.append(map_obj.id)
+        # print("lane_ids: ", (lane_ids))
 
         # speed limit
         if map_obj.speed_limit_mps is None:
@@ -87,6 +91,7 @@ def _get_lane_polylines(
 
         
         lane_roadblock_ids.append(map_obj.get_roadblock_id())
+        # print("roadblock_ids: ", (lane_roadblock_ids))
 
     return (
         MapObjectPolylines(lanes_mid),
@@ -127,35 +132,40 @@ def get_neighbor_vector_set_map(
     feature_layers: List[VectorFeatureLayer] = []
 
     for feature_name in map_features:
+        # print("feature_name: ", feature_name)
         try:
             feature_layers.append(VectorFeatureLayer[feature_name])
+            # print("VectorFeatureLayer[feature_name]: ", VectorFeatureLayer[feature_name])
         except KeyError:
             raise ValueError(f"Object representation for layer: {feature_name} is unavailable")
+    # print("feature_layers: ", feature_layers)
 
     # extract lanes
     if VectorFeatureLayer.LANE in feature_layers:
+        # Process lane-related features including midlines, boundaries, speed limits and traffic lights
         lanes_mid, lanes_left, lanes_right, lane_ids, lane_speed_limit, lane_has_speed_limit, lane_route = _get_lane_polylines(map_api, point, radius)
 
-        # lane baseline paths
+        # Store lane baseline paths (midlines) in coordinates dictionary
         coords[VectorFeatureLayer.LANE.name] = lanes_mid
         speed_limit['lane_has_speed_limit'] = np.array(lane_has_speed_limit, dtype=np.bool_)
         speed_limit['lane_speed_limit'] = np.array(lane_speed_limit, dtype=np.float32)
         
-
-        # lane traffic light data
+        # Handle lane traffic light data encoding
         traffic_light_data[VectorFeatureLayer.LANE.name] = get_traffic_light_encoding(
             lane_ids, traffic_light_status_data
         )
+        # print("traffic_light_data: ", traffic_light_data)
 
-        # lane boundaries
+        # Extract and store left/right lane boundaries when requested
         if VectorFeatureLayer.LEFT_BOUNDARY in feature_layers:
             coords[VectorFeatureLayer.LEFT_BOUNDARY.name] = MapObjectPolylines(lanes_left.polylines)
         if VectorFeatureLayer.RIGHT_BOUNDARY in feature_layers:
             coords[VectorFeatureLayer.RIGHT_BOUNDARY.name] = MapObjectPolylines(lanes_right.polylines)
 
 
-    # extract generic map objects
+    # Extract generic map objects (e.g., crosswalks, stop signs)
     for feature_layer in feature_layers:
+        # Process polygon-based features that are not lane-related
         if feature_layer in VectorFeatureLayerMapping.available_polygon_layers():
             polygons = get_map_object_polygons(
                 map_api, point, radius, VectorFeatureLayerMapping.semantic_map_layer(feature_layer)
@@ -200,7 +210,9 @@ def _convert_lane_to_fixed_size(ego_pose, feature_coords, speed_limit, lane_rout
 
     # get elements according to the mean distance to the ego pose
     mapping = {}
+
     for i, e in enumerate(feature_coords):
+        # print("e: ", i, e.shape)
         dist = np.linalg.norm(e - ego_pose[None, :2], axis=-1).min()
         mapping[i] = dist
 
@@ -209,6 +221,7 @@ def _convert_lane_to_fixed_size(ego_pose, feature_coords, speed_limit, lane_rout
 
     # pad or trim waypoints in a map element
     for idx, element_idx in enumerate(sorted_elements):
+        # print("element_idx: ", idx, element_idx)
         element_coords = feature_coords[element_idx[0]]
         left_coords = left_boundary[element_idx[0]]
         right_coords = right_boundary[element_idx[0]]
@@ -299,9 +312,11 @@ def map_process(route_roadblock_ids, anchor_ego_state, coords, traffic_light_dat
     :return: Dictionary containing processed vector map data with structured representations
              of different map elements (lanes, boundaries, route lanes, etc.)
     """
+    # Convert coordinates and traffic light data into array format
     list_array_data = {}
-
+    # print("coords: ", len(coords))
     for feature_name, feature_coords in coords.items():
+        # print("feature_name: ", feature_name)
         list_feature_coords = []
 
         # Pack coords into array list
@@ -317,15 +332,7 @@ def map_process(route_roadblock_ids, anchor_ego_state, coords, traffic_light_dat
                 list_feature_tl_data.append(np.array(element_tl_data, dtype=np.float64))
             list_array_data[f"traffic_light_data.{feature_name}"] = list_feature_tl_data
 
-    """
-    Vector set map data structure, including:
-    coords: Dict[str, List[<np.ndarray: num_elements, num_points, 2>]].
-            The (x, y) coordinates of each point in a map element across map elements per sample.
-    traffic_light_data: Dict[str, List[<np.ndarray: num_elements, num_points, 4>]].
-            One-hot encoding of traffic light status for each point in a map element across map elements per sample.
-            Encoding: green [1, 0, 0, 0] yellow [0, 1, 0, 0], red [0, 0, 1, 0], unknown [0, 0, 0, 1]
-    """
-    
+    # Process different map features to convert them into fixed size arrays
     array_output = {}
     traffic_light_encoding_dim = LaneSegmentTrafficLightData.encoding_dim()
 
@@ -366,9 +373,16 @@ def map_process(route_roadblock_ids, anchor_ego_state, coords, traffic_light_dat
 
                 # Get roadblock polygon information from lane route data
                 lane_on_route = []
+                # print("route_roadblock_ids__", len(route_roadblock_ids), route_roadblock_ids)
+                # print("lane_routes__", len(lane_routes), lane_routes)
                 pruned_lane_roadblock_ids = [route for route in route_roadblock_ids if route in lane_routes]
                 pruned_route_roadblock_ids = _prune_route_by_connectivity(route_roadblock_ids, pruned_lane_roadblock_ids)
-
+                
+                '''
+                这部分代码遍历所有车道路线（lane_routes）部分代码遍历所有车道路线（lane_routes），
+                检查每条车道路线是否存在于经过剪枝和连通性处理后的最终路线（pruned_route_roadblock_ids）中，
+                并将结果（True 或 False）添加到 lane_on_route 列表中。
+                '''
                 for route in lane_routes:
                     lane_on_route.append(route in pruned_route_roadblock_ids)
 
@@ -384,11 +398,7 @@ def map_process(route_roadblock_ids, anchor_ego_state, coords, traffic_light_dat
             if tl_data is not None:
                 array_output[f"vector_set_map.traffic_light_data.{feature_name}"] = tl_data
 
-    """
-    Post-process the map elements into different map types. Each map type is an array with defined shape.
-    This includes special processing for lanes and route lanes to create structured representations.
-    """
-
+    # Post-process the map elements into different map types with structured representations
     for feature_name in map_features:
         if feature_name == "LANE":
             polylines = array_output[f'vector_set_map.coords.{feature_name}']
@@ -417,6 +427,13 @@ def map_process(route_roadblock_ids, anchor_ego_state, coords, traffic_light_dat
 
     vector_map_output = {'lanes': vector_map_lanes, 'lanes_speed_limit': lane_speed_limit_array, 'lanes_has_speed_limit': lane_has_speed_limit_array, \
                          'route_lanes': vector_map_route_lanes, 'route_lanes_speed_limit': route_lanes_speed_limit, 'route_lanes_has_speed_limit': route_lanes_has_speed_limit}
-
+    
+    print('lanes: ', vector_map_lanes.shape, vector_map_lanes[0])
+    print('lanes_speed_limit: ', lane_speed_limit_array.shape, lane_speed_limit_array[0])
+    print('lanes_has_speed_limit: ', lane_has_speed_limit_array.shape, lane_has_speed_limit_array[0])
+    print('route_lanes: ', vector_map_route_lanes.shape, vector_map_route_lanes[0])
+    print('route_lanes_speed_limit: ', route_lanes_speed_limit.shape, route_lanes_speed_limit[0])
+    print('route_lanes_has_speed_limit: ', route_lanes_has_speed_limit.shape, route_lanes_has_speed_limit[0])
+    
     return vector_map_output
 

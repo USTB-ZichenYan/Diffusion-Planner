@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from timm.models.layers import Mlp
+from timm.layers import Mlp
 from timm.layers import DropPath
 
 from diffusion_planner.model.module.mixer import MixerBlock

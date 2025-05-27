@@ -24,7 +24,7 @@ def diffusion_loss_func(
     B, Pn, T, _ = neighbors_future.shape
     ego_current, neighbors_current = inputs["ego_current_state"][:, :4], inputs["neighbor_agents_past"][:, :Pn, -1, :4]
     neighbor_current_mask = torch.sum(torch.ne(neighbors_current[..., :4], 0), dim=-1) == 0
-    neighbor_mask = torch.concat((neighbor_current_mask.unsqueeze(-1), neighbor_future_mask), dim=-1)
+    neighbor_mask = torch.cat((neighbor_current_mask.unsqueeze(-1), neighbor_future_mask), dim=-1)
 
     gt_future = torch.cat([ego_future[:, None, :, :], neighbors_future[..., :]], dim=1) # [B, P = 1 + 1 + neighbor, T, 4]
     current_states = torch.cat([ego_current[:, None], neighbors_current], dim=1) # [B, P, 4]

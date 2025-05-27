@@ -15,7 +15,8 @@ class DiffusionPlannerData(Dataset):
         return len(self.data_list)
 
     def __getitem__(self, idx):
-
+        print("self.data_dir: ", self.data_dir)
+        print("self.data_list[idx]: ", self.data_list[idx])
         data = opendata(os.path.join(self.data_dir, self.data_list[idx]))
 
         ego_current_state = data['ego_current_state']
