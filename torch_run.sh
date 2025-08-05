@@ -36,4 +36,5 @@ $RUN_PYTHON_PATH train_predictor.py \
 --ddp False \
 --device cuda \
 --batch_size 1 \
+# --use_wandb True \
 --learning_rate 5e-4  # 可选：指定学习率等其他参数

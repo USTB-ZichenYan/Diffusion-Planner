@@ -134,7 +134,7 @@ class Decoder(nn.Module):
                                 "observation_normalizer": self._observation_normalizer,
                                 "state_normalizer": self._state_normalizer
                             },
-                            "guidance_scale": 0.5,
+                            "guidance_scale": 0.25,
                             "guidance_type": "classifier" if self._guidance_fn is not None else "uncond"
                         },
                 )

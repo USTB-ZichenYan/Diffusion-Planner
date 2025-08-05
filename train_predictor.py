@@ -106,12 +106,33 @@ def get_args():
     return args
 
 def model_training(args):
+    """
+    Train a Diffusion Planner model using distributed data parallel (DDP) setup.
+
+    Parameters:
+    args (argparse.Namespace): Contains all training hyperparameters and configurations.
+        Expected attributes include:
+        - name (str): Name of the current experiment
+        - batch_size (int): Batch size for training
+        - learning_rate (float): Learning rate for optimizer
+        - device (str): Device to run the model on ('cuda' or 'cpu')
+        - resume_model_path (str, optional): Path to resume training from
+        - save_dir (str): Directory to save training logs
+        - seed (int): Random seed for reproducibility
+        - train_epochs (int): Total number of training epochs
+        - warm_up_epoch (int): Number of warm-up epochs for scheduler
+        - save_utd (int): Frequency (in epochs) to save model updates
+        - Other parameters related to data loading, augmentation, and model architecture
+
+    Returns:
+    None: The function trains the model and saves checkpoints but does not return any value.
+    """
 
     # init ddp
     global_rank, rank, _ = ddp.ddp_setup_universal(True, args)
-
+    print(f"global rank: {global_rank}, rank: {rank}")
     if global_rank == 0:
-        # Logging
+        # Logging experiment configuration and hyperparameters
         print("------------- {} -------------".format(args.name))
         print("Batch size: {}".format(args.batch_size))
         print("Learning rate: {}".format(args.learning_rate))
@@ -120,6 +141,7 @@ def model_training(args):
         if args.resume_model_path is not None:
             save_path = args.resume_model_path
         else:
+            # Generate new save path with timestamp if not resuming
             from datetime import datetime
             time = datetime.now()
             time = time.strftime("%Y-%m-%d-%H:%M:%S")
@@ -127,7 +149,7 @@ def model_training(args):
             save_path = f"{args.save_dir}/training_log/{args.name}/{time}/"
             os.makedirs(save_path, exist_ok=True)
 
-        # Save args
+        # Save arguments to JSON file for future reference
         args_dict = vars(args)
         args_dict = {k: v if not isinstance(v, (StateNormalizer, ObservationNormalizer)) else v.to_dict() for k, v in args_dict.items() }
 
@@ -136,14 +158,14 @@ def model_training(args):
     else:
         save_path = None
 
-    # set seed
+    # Set random seed for reproducible experiments across all GPUs
     set_seed(args.seed + global_rank)
 
-    # training parameters
+    # Extract key training parameters for later use
     train_epochs = args.train_epochs
     batch_size = args.batch_size
     
-    # set up data loaders
+    # Set up data loaders with distributed sampling
     aug = StatePerturbation(augment_prob=args.augment_prob, device=args.device) if args.use_data_augment else None
     train_set = DiffusionPlannerData(args.train_set, args.train_set_list, args.agent_num, args.predicted_neighbor_num, args.future_len)
     train_sampler = DistributedSampler(train_set, num_replicas=ddp.get_world_size(), rank=global_rank, shuffle=True)
@@ -155,7 +177,7 @@ def model_training(args):
     if args.ddp:
         torch.distributed.barrier()
 
-    # set up model
+    # Initialize and configure diffusion planner model
     diffusion_planner = Diffusion_Planner(args)
     diffusion_planner = diffusion_planner.to(rank if args.device == 'cuda' else args.device)
 
@@ -172,7 +194,7 @@ def model_training(args):
     if global_rank == 0:
         print("Model Params: {}".format(sum(p.numel() for p in ddp.get_model(diffusion_planner, args.ddp).parameters())))
 
-    # optimizer
+    # Set up optimizer and learning rate scheduler
     params = [{'params': ddp.get_model(diffusion_planner, args.ddp).parameters(), 'lr': args.learning_rate}]
 
     optimizer = optim.AdamW(params)
@@ -185,19 +207,18 @@ def model_training(args):
         init_epoch = 0
         wandb_id = None
 
-    # logger
+    # Initialize logging system
     wandb_logger = Logger(args.name, args.notes, args, wandb_resume_id=wandb_id, save_path=save_path, rank=global_rank) 
 
     if args.ddp:
         torch.distributed.barrier()
 
-    # begin training
+    # Main training loop over epochs
     for epoch in range(init_epoch, train_epochs):
         if global_rank == 0:
             print(f"Epoch {epoch+1}/{train_epochs}")
         train_loss, train_total_loss = train_epoch(train_loader, diffusion_planner, optimizer, args, model_ema, aug)
         
-
 
         if global_rank == 0:
             lr_dict = {'lr': optimizer.param_groups[0]['lr']}
@@ -205,7 +226,7 @@ def model_training(args):
             wandb_logger.log_metrics({f"lr/{k}": v for k, v in lr_dict.items()}, step=epoch+1)
 
             if (epoch+1) % args.save_utd == 0:
-                # save model at the end of epoch
+                # Save model checkpoint at specified intervals
                 save_model(diffusion_planner, optimizer, scheduler, save_path, epoch, train_total_loss, wandb_logger.id, model_ema.ema)
                 print(f"Model saved in {save_path}\n")
 
