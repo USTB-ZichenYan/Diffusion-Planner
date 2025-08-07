@@ -8,7 +8,7 @@ from diffusion_planner.utils import ddp
 from diffusion_planner.loss import diffusion_loss_func
 
 
-def train_epoch(data_loader, model, optimizer, args, ema, aug: StatePerturbation=None):
+def train_epoch(data_loader, model, optimizer, args, ema, aug: StatePerturbation=None, check_grad=False):
     epoch_loss = []
 
     model.train()
@@ -104,6 +104,15 @@ def train_epoch(data_loader, model, optimizer, args, ema, aug: StatePerturbation
             loss['loss'] = loss['neighbor_prediction_loss'] + args.alpha_planning_loss * loss['ego_planning_loss']
 
             total_loss = loss['loss'].item()
+
+            # 新增：梯度检查
+            if check_grad and not loss['loss'].requires_grad:
+                print("===== 损失张量无梯度！可训练参数列表：=====")
+                for name, param in model.named_parameters():
+                    if param.requires_grad:
+                        print(f"可训练: {name}")
+                print("======================================")
+                # raise RuntimeError("损失张量不包含梯度信息，无法反向传播")
 
             # loss backward
             loss['loss'].backward()

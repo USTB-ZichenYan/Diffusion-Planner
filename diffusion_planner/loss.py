@@ -69,13 +69,16 @@ def diffusion_loss_func(
     # 构造新的输入字典，包含采样轨迹和扩散时间
     merged_inputs = {
         **inputs,
-        "sampled_trajectories": xT,
-        "diffusion_time": t,
+        "sampled_trajectories": xT.requires_grad_(True),
+        "diffusion_time": t.requires_grad_(True),
     }
 
     # 前向传播模型获取解码器输出
     _, decoder_output = model(merged_inputs) # [B, P, 1 + T, 4]
     score = decoder_output["score"][..., 1:, :] # [B, P, T, 4]
+
+    print("tttttt1输出张量是否有梯度:", decoder_output["score"].requires_grad)
+    print("ttttt2输出张量的梯度函数:", decoder_output["score"].grad_fn)
 
     # 根据模型类型选择不同的损失计算方式
     if model_type == "score":
@@ -96,5 +99,9 @@ def diffusion_loss_func(
 
     # 断言检查损失中没有 NaN 值
     assert not torch.isnan(dpm_loss).sum(), f"loss cannot be nan, z={z}"
+
+    print(f"Model requires grad: {any(p.requires_grad for p in model.parameters())}")
+    print(f"Input requires grad: {merged_inputs['sampled_trajectories'].requires_grad}")
+    print(f"Loss requires grad: {loss['ego_planning_loss'].requires_grad}")
 
     return loss, decoder_output

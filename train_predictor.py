@@ -98,6 +98,32 @@ def get_args():
     parser.add_argument('--ddp', default=True, type=boolean, help='use ddp or not')
     parser.add_argument('--port', default='22323', type=str, help='port')
 
+    # LoRA parameters
+    parser.add_argument('--use_lora', default=False, type=lambda x: (str(x).lower() in ['true', '1', 'yes']), 
+                        help='whether to use LoRA for parameter-efficient fine-tuning')
+    parser.add_argument('--lora_rank', type=int, default=8, 
+                        help='rank of LoRA matrices')
+    parser.add_argument('--lora_alpha', type=float, default=16.0, 
+                        help='scaling factor for LoRA updates')
+    parser.add_argument('--lora_dropout', type=float, default=0.05, 
+                        help='dropout rate for LoRA layers')
+    # 使用模型中存在的模块名
+    parser.add_argument('--lora_target_modules', type=str, nargs='+', 
+                    default=['out_proj'],
+                    help='Names of modules to apply LoRA')
+    parser.add_argument('--lora_lr', type=float, default=3e-4, 
+                        help='learning rate for LoRA parameters')
+    parser.add_argument('--freeze_base_model', default=True, type=lambda x: (str(x).lower() in ['true', '1', 'yes']), 
+                        help='whether to freeze the base model weights when using LoRA')
+        
+    # Pre-trained model paths
+    parser.add_argument('--pretrained_args_path', type=str, 
+                        default="/home/SENSETIME/yanzichen/Diffusion-Planner/checkpoints/args.json",
+                        help='path to pre-trained model args.json')
+    parser.add_argument('--pretrained_ckpt_path', type=str,
+                        default="/home/SENSETIME/yanzichen/Diffusion-Planner/checkpoints/model.pth",
+                        help='path to pre-trained model checkpoint')
+
     args = parser.parse_args()
 
     args.state_normalizer = StateNormalizer.from_json(args)
@@ -137,6 +163,15 @@ def model_training(args):
         print("Batch size: {}".format(args.batch_size))
         print("Learning rate: {}".format(args.learning_rate))
         print("Use device: {}".format(args.device))
+        if args.use_lora:
+            print("Using LoRA fine-tuning")
+            print("LoRA rank: {}".format(args.lora_rank))
+            print("LoRA alpha: {}".format(args.lora_alpha))
+            print("LoRA dropout: {}".format(args.lora_dropout))
+            print("LoRA target modules: {}".format(args.lora_target_modules))
+            print("Freeze base model: {}".format(args.freeze_base_model))
+            print("Pre-trained args path: {}".format(args.pretrained_args_path))
+            print("Pre-trained ckpt path: {}".format(args.pretrained_ckpt_path))
 
         if args.resume_model_path is not None:
             save_path = args.resume_model_path
@@ -178,7 +213,46 @@ def model_training(args):
         torch.distributed.barrier()
 
     # Initialize and configure diffusion planner model
-    diffusion_planner = Diffusion_Planner(args)
+    if args.use_lora:
+        # For LoRA fine-tuning, we load the pre-trained model
+        try:
+            import sys
+            sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+            from lora_fine_tuning import load_pretrained_model_with_lora
+            
+            # Create a config-like object for LoRA parameters
+            class LoRAConfig:
+                def __init__(self, rank, alpha, dropout, target_modules, freeze_base):
+                    self.lora_rank = rank
+                    self.lora_alpha = alpha
+                    self.lora_dropout = dropout
+                    self.lora_target_modules = target_modules
+                    self.freeze_base_model = freeze_base
+            
+            lora_config = LoRAConfig(
+                args.lora_rank,
+                args.lora_alpha,
+                args.lora_dropout,
+                args.lora_target_modules,
+                args.freeze_base_model
+            )
+            
+            # Load pre-trained model with LoRA
+            diffusion_planner = load_pretrained_model_with_lora(
+                args.pretrained_args_path, 
+                args.pretrained_ckpt_path, 
+                lora_config
+            )
+            
+            if global_rank == 0:
+                print("Pre-trained model loaded with LoRA applied")
+        except ImportError as e:
+            print(f"Failed to load pre-trained model with LoRA: {e}")
+            raise
+    else:
+        # Standard training without LoRA
+        diffusion_planner = Diffusion_Planner(args)
+    
     diffusion_planner = diffusion_planner.to(rank if args.device == 'cuda' else args.device)
 
     if args.ddp:
@@ -192,15 +266,35 @@ def model_training(args):
         )
     
     if global_rank == 0:
-        print("Model Params: {}".format(sum(p.numel() for p in ddp.get_model(diffusion_planner, args.ddp).parameters())))
+        total_params = sum(p.numel() for p in ddp.get_model(diffusion_planner, args.ddp).parameters())
+        trainable_params = sum(p.numel() for p in ddp.get_model(diffusion_planner, args.ddp).parameters() if p.requires_grad)
+        print("Total Model Params: {}".format(total_params))
+        print("Trainable Model Params: {}".format(trainable_params))
 
     # Set up optimizer and learning rate scheduler
-    params = [{'params': ddp.get_model(diffusion_planner, args.ddp).parameters(), 'lr': args.learning_rate}]
+    # When using LoRA, we might want to use a different learning rate for LoRA parameters
+    model_params = ddp.get_model(diffusion_planner, args.ddp).parameters()
+    if args.use_lora:
+        # Separate LoRA parameters from other parameters for different learning rates
+        lora_params = []
+        base_params = []
+        for name, param in ddp.get_model(diffusion_planner, args.ddp).named_parameters():
+            if 'lora' in name:
+                lora_params.append(param)
+            else:
+                base_params.append(param)
+        
+        params = [
+            {'params': base_params, 'lr': args.learning_rate},
+            {'params': lora_params, 'lr': args.lora_lr}
+        ]
+    else:
+        params = [{'params': model_params, 'lr': args.learning_rate}]
 
     optimizer = optim.AdamW(params)
     scheduler = CosineAnnealingWarmUpRestarts(optimizer, train_epochs, args.warm_up_epoch)
 
-    if args.resume_model_path is not None:
+    if args.resume_model_path is not None and not args.use_lora:
         print(f"Model loaded from {args.resume_model_path}")
         diffusion_planner, optimizer, scheduler, init_epoch, wandb_id, model_ema = resume_model(args.resume_model_path, diffusion_planner, optimizer, scheduler, model_ema, args.device)
     else:
@@ -217,7 +311,9 @@ def model_training(args):
     for epoch in range(init_epoch, train_epochs):
         if global_rank == 0:
             print(f"Epoch {epoch+1}/{train_epochs}")
-        train_loss, train_total_loss = train_epoch(train_loader, diffusion_planner, optimizer, args, model_ema, aug)
+        # 对于LoRA训练，启用梯度检查
+        check_grad = args.use_lora
+        train_loss, train_total_loss = train_epoch(train_loader, diffusion_planner, optimizer, args, model_ema, aug, check_grad)
         
 
         if global_rank == 0:
