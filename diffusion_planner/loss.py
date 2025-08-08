@@ -74,8 +74,29 @@ def diffusion_loss_func(
     }
 
     # 前向传播模型获取解码器输出
-    _, decoder_output = model(merged_inputs) # [B, P, 1 + T, 4]
+    encoder_output, decoder_output = model(merged_inputs) # [B, P, 1 + T, 4]
     score = decoder_output["score"][..., 1:, :] # [B, P, T, 4]
+            
+    # 在模型forward中添加检查（以编码器输出为例）
+    if 'encoding' in encoder_output:
+        enc_grad_fn = encoder_output['encoding'].grad_fn
+        enc_requires_grad = encoder_output['encoding'].requires_grad
+        print(f"编码器输出 - grad_fn类型: {type(enc_grad_fn)}, 存在性: {enc_grad_fn is not None}, requires_grad: {enc_requires_grad}")
+        # 检查是否包含LoRA相关梯度操作
+        if enc_grad_fn is not None:
+            print(f"  梯度函数链头部: {enc_grad_fn.__class__.__name__}")
+    else:
+        print("编码器输出中未找到'encoding'键")
+
+    # 解码器输出检查
+    if 'score' in decoder_output:
+        dec_grad_fn = decoder_output['score'].grad_fn
+        dec_requires_grad = decoder_output['score'].requires_grad
+        print(f"解码器输出 - grad_fn类型: {type(dec_grad_fn)}, 存在性: {dec_grad_fn is not None}, requires_grad: {dec_requires_grad}")
+        if dec_grad_fn is not None:
+            print(f"  梯度函数链头部: {dec_grad_fn.__class__.__name__}")
+    else:
+        print("解码器输出中未找到'score'键")
 
     # 字典基本信息
     print(f"字典键数量: {len(merged_inputs)}")
@@ -103,7 +124,7 @@ def diffusion_loss_func(
     # 断言检查损失中没有 NaN 值
     assert not torch.isnan(dpm_loss).sum(), f"loss cannot be nan, z={z}"
 
-    print(f"Model requires grad: {any(p.requires_grad for p in model.parameters())}")
+    print(f"Model requires grad: {any(p.requires_grad for p in model.parameters())}") # Model requires grad: True → 模型中有可训练参数 Model requires grad: False → 模型完全冻结
     print(f"Input requires grad: {merged_inputs['sampled_trajectories'].requires_grad}")
     print(f"Loss requires grad: {loss['ego_planning_loss'].requires_grad}")
 

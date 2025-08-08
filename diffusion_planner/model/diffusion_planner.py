@@ -21,9 +21,7 @@ class Diffusion_Planner(nn.Module):
 
         encoder_outputs = self.encoder(inputs)
         decoder_outputs = self.decoder(encoder_outputs, inputs)
-        # 在模型forward中添加检查（以编码器输出为例）
-        print("tttttttt3编码器输出的grad_fn:", encoder_outputs['encoding'].grad_fn)  # 应包含LoRA相关操作
-        print("tttttttttttt4解码器输出的grad_fn:", decoder_outputs['score'].grad_fn)  # 应继承编码器的梯度信息
+
         return encoder_outputs, decoder_outputs
 
 
