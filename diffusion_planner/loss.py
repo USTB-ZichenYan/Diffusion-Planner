@@ -70,15 +70,18 @@ def diffusion_loss_func(
     merged_inputs = {
         **inputs,
         "sampled_trajectories": xT.requires_grad_(True),
-        "diffusion_time": t.requires_grad_(True),
+        "diffusion_time": t.requires_grad_(False)
     }
 
     # 前向传播模型获取解码器输出
     _, decoder_output = model(merged_inputs) # [B, P, 1 + T, 4]
     score = decoder_output["score"][..., 1:, :] # [B, P, T, 4]
 
-    print("tttttt1输出张量是否有梯度:", decoder_output["score"].requires_grad)
-    print("ttttt2输出张量的梯度函数:", decoder_output["score"].grad_fn)
+    # 字典基本信息
+    print(f"字典键数量: {len(merged_inputs)}")
+    print(f"所有键名: {list(merged_inputs.keys())}")
+    print_inputs_grad_status(merged_inputs, "merged_inputs")
+    print_inputs_grad_status(decoder_output, "score")
 
     # 根据模型类型选择不同的损失计算方式
     if model_type == "score":
@@ -105,3 +108,47 @@ def diffusion_loss_func(
     print(f"Loss requires grad: {loss['ego_planning_loss'].requires_grad}")
 
     return loss, decoder_output
+
+def print_inputs_grad_status(input_dict, name="输入字典"):
+    """
+    打印输入字典中所有张量的梯度状态（带颜色和格式优化）
+    
+    Args:
+        input_dict: 要检查的输入字典
+        name: 字典的标识名称
+    """
+    # ANSI颜色代码
+    COLOR_RED = "\033[91m"
+    COLOR_GREEN = "\033[92m"
+    COLOR_YELLOW = "\033[93m"
+    COLOR_BLUE = "\033[94m"
+    COLOR_END = "\033[0m"
+    
+    print(f"\n{COLOR_BLUE}=== 检查 {name} 的梯度状态 ==={COLOR_END}")
+    
+    # 统计信息
+    tensor_count = 0
+    grad_enabled_count = 0
+    
+    # 遍历字典
+    for key, value in input_dict.items():
+        if isinstance(value, torch.Tensor):
+            tensor_count += 1
+            if value.requires_grad:
+                grad_enabled_count += 1
+            
+            # 高亮关键信息
+            key_str = f"{COLOR_YELLOW}{key}{COLOR_END}"
+            grad_status = f"{COLOR_GREEN}需要梯度{COLOR_END}" if value.requires_grad else f"{COLOR_RED}无梯度{COLOR_END}"
+            shape_str = f"{COLOR_BLUE}{tuple(value.shape)}{COLOR_END}"
+            dtype_str = f"{str(value.dtype):<10}"
+            
+            print(f"  {key_str:<25} | 状态: {grad_status:<15} | 形状: {shape_str:<15} | 类型: {dtype_str}")
+        elif isinstance(value, dict):
+            # 递归处理嵌套字典
+            print_inputs_grad_status(value, f"{name}.{key}")
+    
+    # 打印统计摘要
+    print(f"\n{COLOR_BLUE}=== 统计摘要 ===")
+    print(f"总张量数: {tensor_count}")
+    print(f"需要梯度的张量: {grad_enabled_count} ({grad_enabled_count/max(1,tensor_count):.0%}){COLOR_END}")

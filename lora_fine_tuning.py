@@ -4,45 +4,97 @@ import argparse
 import json
 from diffusion_planner.model.diffusion_planner import Diffusion_Planner
 
+class ColorFormatter:
+    """ANSI颜色格式工具类"""
+    RED = "\033[91m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"
+    PURPLE = "\033[95m"
+    CYAN = "\033[96m"
+    END = "\033[0m"
+    BOLD = "\033[1m"
+
+    @classmethod
+    def header(cls, text):
+        return f"{cls.PURPLE}{cls.BOLD}=== {text} ==={cls.END}"
+
+    @classmethod
+    def success(cls, text):
+        return f"{cls.GREEN}✓ {text}{cls.END}"
+
+    @classmethod
+    def warning(cls, text):
+        return f"{cls.YELLOW}⚠ {text}{cls.END}"
+
+    @classmethod
+    def error(cls, text):
+        return f"{cls.RED}✗ {text}{cls.END}"
+
+    @classmethod
+    def info(cls, text):
+        return f"{cls.BLUE}→ {text}{cls.END}"
+
+    @classmethod
+    def param(cls, text):
+        return f"{cls.CYAN}{text}{cls.END}"
+
 def apply_lora(model, lora_config):
-    """
-    Apply LoRA to the model based on the provided configuration.
-    
-    Args:
-        model: The model to apply LoRA to
-        lora_config: Configuration containing LoRA parameters
-    """
+    """应用LoRA适配器到模型"""
     try:
         from peft import LoraConfig, get_peft_model
+        
+        peft_config = LoraConfig(
+            r=lora_config.lora_rank,
+            lora_alpha=lora_config.lora_alpha,
+            target_modules=lora_config.lora_target_modules,
+            lora_dropout=lora_config.lora_dropout,
+            bias="none",
+            modules_to_save=getattr(lora_config, 'modules_to_save', None),
+        )
+        return get_peft_model(model, peft_config)
+        
     except ImportError:
-        raise ImportError("To use LoRA, please install the `peft` library: `pip install peft`")
+        raise ImportError("PEET库未安装，请运行: pip install peft")
+
+def _print_model_parameters(model, filter_key=None, max_lines=300, title=None):
+    """增强版参数打印函数"""
+    # 参数统计
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
-    # Define LoRA configuration
-    peft_config = LoraConfig(
-        r=lora_config.lora_rank,
-        lora_alpha=lora_config.lora_alpha,
-        target_modules=lora_config.lora_target_modules,
-        lora_dropout=lora_config.lora_dropout,
-        bias="none",
-        modules_to_save=lora_config.modules_to_save if hasattr(lora_config, 'modules_to_save') else None,
-    )
-    
-    # Apply LoRA to the model
-    model = get_peft_model(model, peft_config)
-    return model
+    # 打印标题和摘要
+    if title:
+        print(f"\n{ColorFormatter.header(title)}")
+    print(f"{ColorFormatter.info(f'参数总数: {total_params:,} | 可训练: {trainable_params:,} ({trainable_params/total_params:.2%})')}")
+
+    # 打印参数详情
+    count = 0
+    for name, param in model.named_parameters():
+        if filter_key and filter_key not in name:
+            continue
+            
+        color = ColorFormatter.GREEN if param.requires_grad else ColorFormatter.RED
+        print(f"  {ColorFormatter.param(name):<{len(name)+2}} | "
+            f"可训练: {color}{str(param.requires_grad):<5}{ColorFormatter.END} | "
+            f"形状: {ColorFormatter.YELLOW}{tuple(param.shape)}{ColorFormatter.END}")
+        
+        count += 1
+        if max_lines and count >= max_lines:
+            remaining = sum(1 for _ in model.named_parameters() if (not filter_key or filter_key in _[0])) - count
+            if remaining > 0:
+                print(f"{ColorFormatter.warning(f'...（已显示{count}项，剩余{remaining}项未显示）')}")
+            break
 
 def freeze_base_model(model):
-    """
-    优化的基础模型冻结函数，使用PEFT库原生方法
-    
-    Args:
-        model: 已应用LoRA的PEFT模型
-    """
-    # 检查是否是PEFT模型
+    """冻结基础模型参数（保留LoRA可训练）"""
     if not hasattr(model, 'print_trainable_parameters'):
-        raise ValueError("模型不是PEFT模型，请先应用LoRA")
+        raise ValueError(ColorFormatter.error("非PEFT模型，请先应用LoRA"))
     
-    # 冻结基础模型参数
+    _print_model_parameters(model, title="模型冻结前状态")
+    
+    # 执行冻结
+    print(ColorFormatter.info("冻结基础模型参数..."))
     for param in model.base_model.parameters():
         param.requires_grad = False
     
@@ -50,84 +102,73 @@ def freeze_base_model(model):
     for name, param in model.named_parameters():
         if any(key in name for key in ['lora_A', 'lora_B', 'lora_embedding']):
             param.requires_grad = True
+
+    # 验证结果
+    _print_model_parameters(model, 
+                          title="模型冻结后状态",
+                          filter_key='lora')
+    
+    if hasattr(model, 'print_trainable_parameters'):
+        print(f"\n{ColorFormatter.header('PEFT官方统计')}")
+        model.print_trainable_parameters()
     
     return model
 
 def load_pretrained_model_with_lora(args_file, ckpt_file, lora_config):
-    """
-    加载预训练模型并应用LoRA，使用优化的冻结逻辑
-    """
+    """完整模型加载流程（带增强打印）"""
     try:
-        # 加载参数文件
+        # 初始化阶段
+        print(f"\n{ColorFormatter.header(f'开始加载模型 (配置: {args_file}, 权重: {ckpt_file}')}")
+        
+        # 加载配置
         with open(args_file, 'r') as f:
-            args_dict = json.load(f)
-        args = argparse.Namespace(**args_dict)
+            args = argparse.Namespace(**json.load(f))
         
         # 初始化模型
         model = Diffusion_Planner(args)
         
-        # 加载预训练权重
+        # 加载权重
+        print(ColorFormatter.info("加载预训练权重..."))
         checkpoint = torch.load(ckpt_file, map_location='cpu')
-        state_dict = checkpoint.get('model_state_dict', checkpoint)
-        model.load_state_dict(state_dict, strict=False)
+        model.load_state_dict(checkpoint.get('model_state_dict', checkpoint), strict=False)
+        _print_model_parameters(model, title="初始模型状态")
         
         # 应用LoRA
+        print(ColorFormatter.info("应用LoRA适配器..."))
         model = apply_lora(model, lora_config)
-        
-        # 冻结基础模型（使用优化后的方法）
+        _print_model_parameters(model, 
+                              title="LoRA应用后状态",
+                              filter_key='lora',
+                              max_lines=20)
+
+        # 冻结处理
         if getattr(lora_config, 'freeze_base_model', True):
             model = freeze_base_model(model)
-            print("基础模型已冻结，仅LoRA参数可训练")
-            
-            # 使用PEFT原生方法验证可训练参数
-            print("PEFT模型可训练参数:")
-            model.print_trainable_parameters()
+            print(ColorFormatter.success("基础模型冻结完成"))
         else:
-            print("基础模型和LoRA参数均可训练")
+            print(ColorFormatter.warning("基础模型保持未冻结状态"))
         
         return model
         
     except Exception as e:
-        print(f"加载模型失败: {e}")
+        print(ColorFormatter.error(f"加载失败: {str(e)}"))
         raise
 
-def get_optimizer(model, lora_config):
-    """
-    Create an optimizer that only optimizes the LoRA parameters.
+# 使用示例
+if __name__ == "__main__":
+    class LoRAConfig:
+        lora_rank = 8
+        lora_alpha = 16
+        lora_dropout = 0.1
+        lora_target_modules = ["attn", "mlp"]
+        freeze_base_model = True
     
-    Args:
-        model: The model with LoRA applied
-        lora_config: Configuration containing LoRA parameters
-    """
-    # Collect only trainable parameters
-    trainable_params = [p for p in model.parameters() if p.requires_grad]
-    
-    # Use AdamW optimizer which is commonly used for transformer models
-    optimizer = torch.optim.AdamW(
-        trainable_params,
-        lr=lora_config.learning_rate,
-        weight_decay=lora_config.weight_decay if hasattr(lora_config, 'weight_decay') else 0.01
-    )
-    
-    return optimizer
-
-def print_trainable_parameters(model):
-    """
-    Print the number of trainable parameters in the model.
-    
-    Args:
-        model: The model to analyze
-    """
-    trainable_params = 0
-    all_param = 0
-    for _, param in model.named_parameters():
-        all_param += param.numel()
-        if param.requires_grad:
-            trainable_params += param.numel()
-    print(
-        f"trainable params: {trainable_params:,d} || "
-        f"all params: {all_param:,d} || "
-        f"trainable%: {100 * trainable_params / all_param:.4f}"
-    )
-    return trainable_params, all_param
-
+    try:
+        model = load_pretrained_model_with_lora(
+            "config.json",
+            "model.ckpt",
+            LoRAConfig()
+        )
+        print(ColorFormatter.success("模型加载成功！"))
+    except Exception as e:
+        print(ColorFormatter.error(f"错误: {e}"))
